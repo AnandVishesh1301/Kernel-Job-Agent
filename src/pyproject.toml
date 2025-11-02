@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.17.1",
     "asyncpg>=0.30.0",
     "boto3>=1.40.64",
+    "python-multipart>=0.0.9",
     "fastapi>=0.120.4",
     "httpx>=0.28.1",
     "langchain>=1.0.3",
