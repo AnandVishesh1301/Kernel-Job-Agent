@@ -1,5 +1,6 @@
-// Minimal Kernel action for job application autofill
-// Assumes a Kernel runtime provides a `kernel` global with browser APIs
+// Kernel app entrypoint: registers the 'fill_job_form' action and runs a minimal autofill via Playwright
+import Kernel, { type KernelContext } from '@onkernel/sdk';
+import { chromium } from 'playwright';
 
 type Profile = {
   name?: string;
@@ -73,36 +74,37 @@ async function genericStrategy(page: any, input: Input): Promise<string[]> {
   return notes;
 }
 
-export default async function fill_job_form(input: Input): Promise<Output> {
-  const notes: string[] = [];
-  let browser: any | undefined;
-  try {
-    browser = await (globalThis as any).kernel.browser.create({
-      persistenceId: input.persistenceId,
-      stealth: true,
-    });
-    const page = await browser.newPage();
-    await page.goto(input.url, { waitUntil: 'domcontentloaded' });
+const kernel = new Kernel();
+const app = kernel.app('kernel-job-agent');
 
+app.action('fill_job_form', async (ctx: KernelContext, input: Input): Promise<Output> => {
+  const notes: string[] = [];
+
+  // Create cloud browser and connect over CDP with Playwright
+  const kBrowser = await kernel.browsers.create({
+    invocation_id: ctx.invocation_id,
+    stealth: true,
+  });
+
+  const browser = await chromium.connectOverCDP(kBrowser.cdp_ws_url);
+  const context = browser.contexts()[0] || (await browser.newContext());
+  const page = context.pages()[0] || (await context.newPage());
+
+  try {
+    await page.goto(input.url, { waitUntil: 'domcontentloaded' });
     const ats = detectAts(input.url);
     notes.push(`Detected ATS: ${ats}`);
 
-    // Strategy dispatch (stubs route to generic for now)
     await genericStrategy(page, input);
 
     if (input.takeProofScreenshots) {
-      try {
-        // In future, upload to R2 via signed URL; for now, just indicate capability
-        notes.push('Screenshot taken (not uploaded in MVP)');
-      } catch (e) {
-        notes.push(`Screenshot error: ${String(e)}`);
-      }
+      notes.push('Screenshot step available (upload wiring later)');
     }
 
     return {
       status: 'succeeded',
       summary: 'Navigation and basic autofill completed',
-      liveViewUrl: browser.liveViewUrl,
+      liveViewUrl: kBrowser.browser_live_view_url,
       screenshots: [],
       notes,
     };
@@ -111,11 +113,13 @@ export default async function fill_job_form(input: Input): Promise<Output> {
     return {
       status: 'failed',
       summary: 'Failed to fill job form',
-      liveViewUrl: browser?.liveViewUrl,
+      liveViewUrl: kBrowser.browser_live_view_url,
       screenshots: [],
       notes,
     };
+  } finally {
+    try { await browser.close(); } catch {}
   }
-}
+});
 
 
