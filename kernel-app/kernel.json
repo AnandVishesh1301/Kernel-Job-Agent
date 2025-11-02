@@ -1,0 +1,6 @@
+{
+  "name": "kernel-job-agent",
+  "entrypoint": "actions/fill_job_form.ts",
+  "runtime": "nodejs"
+}
+
