@@ -1,6 +1,9 @@
 // Kernel app entrypoint: registers the 'fill_job_form' action and runs a minimal autofill via Playwright
 import Kernel, { type KernelContext } from '@onkernel/sdk';
 import { chromium } from 'playwright';
+import os from 'os';
+import path from 'path';
+import fs from 'fs/promises';
 import type { Page } from 'playwright';
 
 type Profile = {
@@ -113,6 +116,112 @@ async function greenhouseStrategy(page: Page, input: Input, notes: string[]): Pr
       if (input.profile.phone) {
         await target.fill?.('input[name="phone"], #phone, input[type="tel"]', input.profile.phone).catch(() => {});
         notes.push('Filled phone');
+      }
+    } catch {}
+
+    // Heuristic mapping for common additional fields
+    const links = Array.isArray(input.profile.links) ? input.profile.links as string[] : [];
+    const linkedin = links.find(u => /linkedin\.com/i.test(u));
+    const github = links.find(u => /github\.com/i.test(u));
+    const website = links.find(u => !/linkedin|github/i.test(u));
+
+    async function fillByLabel(texts: string[], value?: string) {
+      if (!value) return false;
+      for (const t of texts) {
+        try {
+          // Try associated input/textarea/select under label
+          const lbl = await target.$(`label:has-text("${t}")`);
+          if (lbl) {
+            const forAttr = await lbl.getAttribute('for');
+            if (forAttr) {
+              const inp = await target.$(`#${forAttr}`);
+              if (inp) {
+                await inp.fill(value);
+                notes.push(`Filled by label ${t}`);
+                return true;
+              }
+            }
+            const nested = await lbl.$('input, textarea, select');
+            if (nested) {
+              const tag = await nested.evaluate(el => el.tagName.toLowerCase());
+              if (tag === 'select') {
+                await (nested as any).selectOption({ label: value }).catch(async () => (nested as any).selectOption(value).catch(() => {}));
+              } else {
+                await (nested as any).fill(value);
+              }
+              notes.push(`Filled by nested label ${t}`);
+              return true;
+            }
+          }
+        } catch {}
+      }
+      return false;
+    }
+
+    // Fill common link fields
+    await fillByLabel(['LinkedIn', 'LinkedIn Profile'], linkedin);
+    await fillByLabel(['GitHub', 'Github'], github);
+    await fillByLabel(['Website', 'Portfolio', 'Personal Website'], website);
+
+    // Address and location-like fields
+    await fillByLabel(['Address', 'Street'], input.profile.address);
+    // If parsed profile had city/state/zip, add here when available
+
+    // Education and Experience (best-effort, single-line)
+    const edu = Array.isArray(input.profile.education) && input.profile.education.length > 0 ? input.profile.education[0] : undefined;
+    const exp = Array.isArray(input.profile.experience) && input.profile.experience.length > 0 ? input.profile.experience[0] : undefined;
+    await fillByLabel(['School', 'University', 'College'], edu?.school);
+    await fillByLabel(['Degree', 'Qualification'], edu?.degree);
+    await fillByLabel(['Company', 'Employer'], exp?.company);
+    await fillByLabel(['Title', 'Job Title', 'Position'], exp?.title);
+
+    // Preferences (EEO-like) best-effort based on provided prefs
+    if (input.prefs && typeof input.prefs === 'object') {
+      const prefs = input.prefs as Record<string, any>;
+      async function selectRadioByLabel(questionLabels: string[], answerText?: string) {
+        if (!answerText) return;
+        for (const q of questionLabels) {
+          try {
+            const qEl = await target.$(`text=${q}`);
+            if (qEl) {
+              const opt = await target.$(`label:has-text("${answerText}")`);
+              if (opt) { await opt.click().catch(() => {}); notes.push(`Selected ${answerText} for ${q}`); return; }
+            }
+          } catch {}
+        }
+      }
+      await selectRadioByLabel(['Gender', 'Sex'], prefs['gender'] as string);
+      await selectRadioByLabel(['Veteran'], prefs['veteran'] as string);
+      await selectRadioByLabel(['Disability'], prefs['disability'] as string);
+      await selectRadioByLabel(['Work Authorization', 'Work authorisation'], prefs['work_auth'] as string || (input.profile.work_auth as string | undefined));
+    }
+
+    // Resume upload (download to temp file and attach to file input inside GH iframe)
+    if (input.r2Assets?.resumeUrl) {
+      try {
+        const res = await fetch(input.r2Assets.resumeUrl);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const tmp = path.join(os.tmpdir(), `resume-${Date.now()}.pdf`);
+        await fs.writeFile(tmp, buf);
+        const fileInput = await target.$('input[type="file"]');
+        if (fileInput) {
+          // setInputFiles via Playwright element handle
+          await (fileInput as any).setInputFiles(tmp);
+          notes.push('Uploaded resume from R2');
+        } else {
+          notes.push('No file input found for resume upload');
+        }
+      } catch (e) {
+        notes.push(`Resume upload failed: ${String(e)}`);
+      }
+    }
+
+    // Try to submit the application if a submit button is visible
+    try {
+      const submitBtn = await target.$('button[type="submit"], button:has-text("Submit Application"), input[type="submit"]');
+      if (submitBtn) {
+        await submitBtn.click();
+        notes.push('Clicked submit');
       }
     } catch {}
 
