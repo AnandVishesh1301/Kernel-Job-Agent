@@ -51,8 +51,9 @@ class KernelClient:
                     if callable(get_result_fn):
                         res_try = get_result_fn(invocation_id=inv_id)
                         return res_try
-            if status in ("succeeded", "failed", "cancelled"):
-                break
+
+                if status in ("succeeded", "failed", "cancelled"):
+                    break
             except Exception:
                 # Ignore transient errors while polling
                 pass
