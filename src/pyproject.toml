@@ -20,4 +20,5 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "sqlalchemy[asyncio]>=2.0.44",
     "uvicorn[standard]>=0.38.0",
+    "kernel>=0.0.1",
 ]

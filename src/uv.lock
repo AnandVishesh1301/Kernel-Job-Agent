@@ -360,6 +360,23 @@ wheels = [
 ]
 
 [[package]]
+name = "kernel"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/b8/f82ed402edd007e3d222197eafb4b39b08a49371282740efaff886e7e5cf/kernel-0.18.0.tar.gz", hash = "sha256:7a8b7f8f3392182af50c98d533d7c0a652db9fd544d58245b8a6296739596169", size = 153415, upload-time = "2025-10-30T21:19:57.297Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2c/b1/aa6ac8e954a2a6d6d4231a445701d1b221f028a679155e7f1d2c3adf57ce/kernel-0.18.0-py3-none-any.whl", hash = "sha256:86ac06496e20b7e6bd18a1023b8c83ddcbe9db402aab1e687f038e1cb7ada646", size = 166141, upload-time = "2025-10-30T21:19:55.794Z" },
+]
+
+[[package]]
 name = "langchain"
 version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -870,6 +887,7 @@ dependencies = [
     { name = "boto3" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "kernel" },
     { name = "langchain" },
     { name = "langgraph" },
     { name = "langsmith" },
@@ -889,6 +907,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.40.64" },
     { name = "fastapi", specifier = ">=0.120.4" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "kernel", specifier = ">=0.0.1" },
     { name = "langchain", specifier = ">=1.0.3" },
     { name = "langgraph", specifier = ">=1.0.2" },
     { name = "langsmith", specifier = ">=0.4.39" },
