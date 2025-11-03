@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     KERNEL_API_KEY: Optional[str] = None
     KERNEL_APP_NAME: Optional[str] = None
     KERNEL_ACTION_NAME: Optional[str] = None
+    KERNEL_APP_VERSION: Optional[str] = None
 
     # Optional tracing
     LANGSMITH_API_KEY: Optional[str] = None

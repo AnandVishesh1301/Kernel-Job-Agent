@@ -1,6 +1,6 @@
 // Kernel app entrypoint: registers the 'fill_job_form' action and runs a minimal autofill via Playwright
 import Kernel, { type KernelContext } from '@onkernel/sdk';
-import { chromium } from 'playwright';
+import { chromium, Page } from 'playwright';
 
 type Profile = {
   name?: string;
@@ -36,42 +36,65 @@ type Output = {
 
 function detectAts(url: string): 'greenhouse' | 'lever' | 'workday' | 'generic' {
   const u = url.toLowerCase();
-  if (u.includes('greenhouse.io')) return 'greenhouse';
+  if (u.includes('greenhouse.io') || u.includes('gh_jid=')) return 'greenhouse';
   if (u.includes('lever.co')) return 'lever';
   if (u.includes('myworkdayjobs.com') || u.includes('workday')) return 'workday';
   return 'generic';
 }
 
-async function genericStrategy(page: any, input: Input): Promise<string[]> {
-  const notes: string[] = [];
-  // Best-effort simple selectors; sites vary widely.
-  // We keep this intentionally minimal; domain-specific flows should go in dedicated strategies.
+async function tryFill(page: Page, selectors: string[], value?: string | null, notes?: string[]) {
+  if (!value) return;
+  for (const sel of selectors) {
+      const el = await page.$(sel);
+    if (el) {
+      try { await el.fill(value); notes && notes.push(`Filled ${sel}`); return; } catch {}
+    }
+  }
+}
+
+async function genericStrategy(page: Page, input: Input, notes: string[]): Promise<void> {
   try {
-    // Name/email/phone fields (common placeholders)
-    if (input.profile.name) {
-      const sel = 'input[placeholder*="Name" i], input[name*="name" i]';
-      const el = await page.$(sel);
-      if (el) { await el.fill(input.profile.name); notes.push('Filled name'); }
-    }
-    if (input.profile.email) {
-      const sel = 'input[type="email"], input[name*="email" i]';
-      const el = await page.$(sel);
-      if (el) { await el.fill(input.profile.email); notes.push('Filled email'); }
-    }
-    if (input.profile.phone) {
-      const sel = 'input[type="tel"], input[name*="phone" i]';
-      const el = await page.$(sel);
-      if (el) { await el.fill(input.profile.phone); notes.push('Filled phone'); }
-    }
+    await tryFill(page, ['input[placeholder*="Name" i]', 'input[name*="name" i]'], input.profile.name, notes);
+    await tryFill(page, ['input[type="email"]', 'input[name*="email" i]'], input.profile.email, notes);
+    await tryFill(page, ['input[type="tel"]', 'input[name*="phone" i]'], input.profile.phone, notes);
   } catch (e) {
     notes.push(`Field fill error: ${String(e)}`);
   }
-  // Resume upload: this requires a file path normally; with a URL we need a signed upload flow.
-  // For the MVP, leave as a note; backend will evolve to pass signed PUT/GET URLs.
   if (input.r2Assets?.resumeUrl) {
     notes.push(`Resume available at: ${input.r2Assets.resumeUrl}`);
   }
-  return notes;
+}
+
+async function greenhouseStrategy(page: Page, input: Input, notes: string[]): Promise<void> {
+  // Click an Apply button/link then fill standard GH fields
+  try {
+    // Common Apply triggers
+    const applySelectors = [
+      'a:has-text("Apply")',
+      'button:has-text("Apply")',
+      'a:has-text("Apply for this job")',
+      'button:has-text("Apply for this job")'
+    ];
+    for (const sel of applySelectors) {
+      const el = await page.$(sel);
+      if (el) { await el.click(); notes.push(`Clicked ${sel}`); break; }
+    }
+    // Wait for potential iframe/modal load
+    await page.waitForTimeout(1000);
+
+    // Fill common Greenhouse fields
+    await tryFill(page, ['input[name="first_name"]', 'input#first_name'], input.profile.name?.split(' ')[0] || input.profile.name, notes);
+    await tryFill(page, ['input[name="last_name"]', 'input#last_name'], input.profile.name?.split(' ').slice(1).join(' '), notes);
+    await tryFill(page, ['input[name="email"]', 'input#email', 'input[type="email"]'], input.profile.email, notes);
+    await tryFill(page, ['input[name="phone"]', 'input#phone', 'input[type="tel"]'], input.profile.phone, notes);
+
+    // Resume upload placeholders (real upload requires signed PUT->file path mapping)
+    if (input.r2Assets?.resumeUrl) {
+      notes.push(`Resume available at: ${input.r2Assets.resumeUrl}`);
+    }
+  } catch (e) {
+    notes.push(`Greenhouse flow error: ${String(e)}`);
+  }
 }
 
 const kernel = new Kernel();
@@ -92,10 +115,20 @@ app.action('fill_job_form', async (ctx: KernelContext, input: Input): Promise<Ou
 
   try {
     await page.goto(input.url, { waitUntil: 'domcontentloaded' });
-    const ats = detectAts(input.url);
+    let ats = detectAts(input.url);
+
+    // Heuristic: detect Greenhouse embeds by script URLs/text on page
+    const content = await page.content();
+    if (content.includes('greenhouse.io') || content.includes('boards.greenhouse.io')) {
+      ats = 'greenhouse';
+    }
     notes.push(`Detected ATS: ${ats}`);
 
-    await genericStrategy(page, input);
+    if (ats === 'greenhouse') {
+      await greenhouseStrategy(page, input, notes);
+    } else {
+      await genericStrategy(page, input, notes);
+    }
 
     if (input.takeProofScreenshots) {
       notes.push('Screenshot step available (upload wiring later)');
