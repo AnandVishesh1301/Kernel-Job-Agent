@@ -81,13 +81,40 @@ async function greenhouseStrategy(page: Page, input: Input, notes: string[]): Pr
       if (el) { await el.click(); notes.push(`Clicked ${sel}`); break; }
     }
     // Wait for potential iframe/modal load
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
 
-    // Fill common Greenhouse fields
-    await tryFill(page, ['input[name="first_name"]', 'input#first_name'], input.profile.name?.split(' ')[0] || input.profile.name, notes);
-    await tryFill(page, ['input[name="last_name"]', 'input#last_name'], input.profile.name?.split(' ').slice(1).join(' '), notes);
-    await tryFill(page, ['input[name="email"]', 'input#email', 'input[type="email"]'], input.profile.email, notes);
-    await tryFill(page, ['input[name="phone"]', 'input#phone', 'input[type="tel"]'], input.profile.phone, notes);
+    // Many Greenhouse forms are embedded in an iframe (boards.greenhouse.io)
+    // Try to target the iframe if present, otherwise fall back to the main page
+    const ghFrame = page.frames().find(f => /greenhouse\.io|boards\.greenhouse\.io/i.test(f.url()));
+    const target = ghFrame ?? page;
+    if (ghFrame) notes.push(`Detected Greenhouse iframe: ${ghFrame.url()}`);
+
+    const firstName = input.profile.name?.split(' ')[0] || input.profile.name || '';
+    const lastName = (input.profile.name?.split(' ').slice(1).join(' ') || '').trim();
+
+    // Fill common Greenhouse fields inside frame or page
+    try {
+      await target.fill?.('input[name="first_name"], #first_name', firstName).catch(() => {});
+      if (firstName) notes.push('Filled first_name');
+    } catch {}
+    try {
+      if (lastName) {
+        await target.fill?.('input[name="last_name"], #last_name', lastName).catch(() => {});
+        notes.push('Filled last_name');
+      }
+    } catch {}
+    try {
+      if (input.profile.email) {
+        await target.fill?.('input[name="email"], #email, input[type="email"]', input.profile.email).catch(() => {});
+        notes.push('Filled email');
+      }
+    } catch {}
+    try {
+      if (input.profile.phone) {
+        await target.fill?.('input[name="phone"], #phone, input[type="tel"]', input.profile.phone).catch(() => {});
+        notes.push('Filled phone');
+      }
+    } catch {}
 
     // Resume upload placeholders (real upload requires signed PUT->file path mapping)
     if (input.r2Assets?.resumeUrl) {
