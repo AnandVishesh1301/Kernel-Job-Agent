@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
-import type { Page } from 'playwright';
+import type { Page, Frame } from 'playwright';
 
 type Profile = {
   name?: string;
@@ -37,6 +37,155 @@ type Output = {
   screenshots?: string[]; // URLs or notes (for now we return notes)
   notes?: string[];
 };
+
+function splitName(full?: string | null): { first: string; last: string } {
+  const f = (full || '').trim();
+  if (!f) return { first: '', last: '' };
+  const parts = f.split(/\s+/);
+  if (parts.length === 1) return { first: parts[0], last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
+function deriveAddressParts(address?: string | null): { city?: string; state?: string; postal?: string; country?: string } {
+  const out: { city?: string; state?: string; postal?: string; country?: string } = {};
+  if (!address) return out;
+  const parts = address.split(',').map(s => s.trim());
+  if (parts.length >= 1) out.city = parts[0];
+  if (parts.length >= 2) out.state = parts[1];
+  if (parts.length >= 3) out.postal = parts[2].match(/[A-Za-z0-9\-\s]+/)?.[0]?.trim();
+  return out;
+}
+
+async function smartAutofill(target: Page | Frame, input: Input, notes: string[]): Promise<void> {
+  try {
+    const { first, last } = splitName(input.profile.name);
+    const links = Array.isArray(input.profile.links) ? (input.profile.links as string[]) : [];
+    const linkedin = links.find(u => /linkedin\.com/i.test(u));
+    const github = links.find(u => /github\.com/i.test(u));
+    const website = links.find(u => !/linkedin|github/i.test(u));
+    const addrParts = deriveAddressParts(input.profile.address);
+    const edu = Array.isArray(input.profile.education) && input.profile.education.length > 0 ? input.profile.education[0] : undefined;
+    const exp = Array.isArray(input.profile.experience) && input.profile.experience.length > 0 ? input.profile.experience[0] : undefined;
+
+    const valueByKeyword: Record<string, string | undefined> = {
+      'first name': first,
+      'firstname': first,
+      'given': first,
+      'last name': last,
+      'lastname': last,
+      'surname': last,
+      'family name': last,
+      'full name': input.profile.name || undefined,
+      'name': input.profile.name || undefined,
+      'email': input.profile.email || undefined,
+      'phone': input.profile.phone || undefined,
+      'mobile': input.profile.phone || undefined,
+      'telephone': input.profile.phone || undefined,
+      'linkedin': linkedin,
+      'github': github,
+      'portfolio': website,
+      'website': website,
+      'url': website,
+      'address': input.profile.address || undefined,
+      'street': input.profile.address || undefined,
+      'city': addrParts.city,
+      'town': addrParts.city,
+      'state': addrParts.state,
+      'province': addrParts.state,
+      'zip': addrParts.postal,
+      'postal': addrParts.postal,
+      'country': (input.prefs as any)?.country || undefined,
+      'school': edu?.school,
+      'university': edu?.school,
+      'college': edu?.school,
+      'degree': edu?.degree,
+      'company': exp?.company,
+      'employer': exp?.company,
+      'title': exp?.title,
+      'position': exp?.title,
+    };
+
+    const elements = await (target as any).$$('input, textarea, select');
+    for (const el of elements as any[]) {
+      try {
+        const visible = await el.isVisible?.();
+        const disabled = await el.isDisabled?.();
+        if (visible === false || disabled === true) continue;
+        const tag = (await el.evaluate((e: any) => e.tagName.toLowerCase())) as string;
+        if (tag === 'input') {
+          const type = (await el.getAttribute('type')) || 'text';
+          if (['submit', 'button', 'hidden'].includes(type)) continue;
+          if (type === 'file') continue; // handled elsewhere
+        }
+        const nameAttr = (await el.getAttribute('name')) || '';
+        const idAttr = (await el.getAttribute('id')) || '';
+        const placeholder = (await el.getAttribute('placeholder')) || '';
+        const aria = (await el.getAttribute('aria-label')) || '';
+        const labelText = await el.evaluate((e: any) => {
+          // get <label for=id> text or closest label ancestor
+          const id = e.getAttribute('id');
+          if (id) {
+            const lbl = document.querySelector(`label[for="${id}"]`);
+            if (lbl) return (lbl as HTMLElement).innerText;
+          }
+          let parent: any = e.parentElement;
+          while (parent) {
+            if (parent.tagName && parent.tagName.toLowerCase() === 'label') return parent.innerText;
+            parent = parent.parentElement;
+          }
+          return '';
+        });
+        const haystack = `${nameAttr} ${idAttr} ${placeholder} ${aria} ${labelText}`.toLowerCase();
+
+        // date handling
+        const dateValue = (key: 'start' | 'end') => {
+          const raw = key === 'start' ? exp?.start || edu?.start : exp?.end || edu?.end;
+          if (!raw) return undefined;
+          const m = String(raw).match(/\d{4}-\d{2}-\d{2}|\d{4}-\d{2}|\d{4}/);
+          return m ? m[0] : String(raw);
+        };
+
+        let filled = false;
+        for (const [k, v] of Object.entries(valueByKeyword)) {
+          if (!v) continue;
+          if (haystack.includes(k)) {
+            if (tag === 'select') {
+              await el.selectOption({ label: v }).catch(async () => {
+                await el.selectOption(v).catch(() => {});
+              });
+            } else {
+              await el.fill(v).catch(() => {});
+            }
+            notes.push(`Smart filled ${k}`);
+            filled = true;
+            break;
+          }
+        }
+
+        if (!filled) {
+          // Generic date start/end
+          if (/start date|start|from/.test(haystack)) {
+            const v = dateValue('start');
+            if (v) { await el.fill(v).catch(() => {}); notes.push('Filled start date'); continue; }
+          }
+          if (/end date|end|to/.test(haystack)) {
+            const v = dateValue('end');
+            if (v) { await el.fill(v).catch(() => {}); notes.push('Filled end date'); continue; }
+          }
+        }
+
+        // Yes/No radios from prefs
+        if (tag !== 'select' && /work authorization|sponsorship|work auth|require sponsorship/.test(haystack)) {
+          const want = (input.prefs as any)?.work_auth || input.profile.work_auth || 'No';
+          const lbl = await (target as any).$(`label:has-text("${String(want)}")`);
+          await lbl?.click().catch(() => {});
+        }
+      } catch {}
+    }
+  } catch (e) {
+    notes.push(`Smart autofill error: ${String(e)}`);
+  }
+}
 
 function detectAts(url: string): 'greenhouse' | 'lever' | 'workday' | 'generic' {
   const u = url.toLowerCase();
@@ -195,6 +344,9 @@ async function greenhouseStrategy(page: Page, input: Input, notes: string[]): Pr
       await selectRadioByLabel(['Disability'], prefs['disability'] as string);
       await selectRadioByLabel(['Work Authorization', 'Work authorisation'], prefs['work_auth'] as string || (input.profile.work_auth as string | undefined));
     }
+
+    // Run smart autofill across remaining fields
+    await smartAutofill(target, input, notes);
 
     // Resume upload (download to temp file and attach to file input inside GH iframe)
     if (input.r2Assets?.resumeUrl) {
