@@ -1,6 +1,7 @@
 // Kernel app entrypoint: registers the 'fill_job_form' action and runs a minimal autofill via Playwright
 import Kernel, { type KernelContext } from '@onkernel/sdk';
-import { chromium, Page } from 'playwright';
+import { chromium } from 'playwright';
+import type { Page } from 'playwright';
 
 type Profile = {
   name?: string;
