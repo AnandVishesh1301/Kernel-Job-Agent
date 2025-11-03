@@ -48,7 +48,7 @@ async function tryFill(page: Page, selectors: string[], value?: string | null, n
   for (const sel of selectors) {
       const el = await page.$(sel);
     if (el) {
-      try { await el.fill(value); notes && notes.push(`Filled ${sel}`); return; } catch {}
+      try { await el.fill(value); notes?.push(`Filled ${sel}`); return; } catch {}
     }
   }
 }
@@ -101,8 +101,19 @@ async function greenhouseStrategy(page: Page, input: Input, notes: string[]): Pr
 const kernel = new Kernel();
 const app = kernel.app('kernel-job-agent');
 
-app.action('fill_job_form', async (ctx: KernelContext, input: Input): Promise<Output> => {
+app.action('fill_job_form', async (ctx: KernelContext, payload?: Input): Promise<Output> => {
   const notes: string[] = [];
+  
+  if (!payload) {
+    return {
+      status: 'failed',
+      summary: 'Missing required input payload',
+      screenshots: [],
+      notes: ['No input provided'],
+    };
+  }
+  
+  const input = payload;
 
   // Create cloud browser and connect over CDP with Playwright
   const kBrowser = await kernel.browsers.create({
